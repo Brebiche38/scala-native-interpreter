@@ -6,7 +6,7 @@
 
 #define PATH "/Users/work/Documents/Interpreter/scala-native/sandbox/target/scala-2.11/native/bin.nbc"
 
-extern int loop(void* data, void* oot, void* spr, size_t entry) asm("loop");
+extern int loop(void* data, void* oot, void* spr, size_t entry, int argc, char** argv) asm("loop");
 extern void* opcode_offset_table[65536];
 
 uint8_t part(uint16_t opcode, size_t byte) {
@@ -20,11 +20,11 @@ int main(int argc, char** argv) {
 	 3. Entry offset (address of main function)
 	 */
 	char *data_path = PATH;
-	size_t data_size = atoi(argv[1]);
-	size_t entry_offset = atoi(argv[2]);
+	size_t data_size = strtoul(argv[1], NULL, 16);
+	size_t entry_offset = strtoul(argv[2], NULL, 16);
 
-	FILE* data_file = fopen(data_path, "r");
-	char* data = mmap(NULL, data_size, PROT_READ, MAP_PRIVATE, fileno(data_file), 0);
+	FILE* data_file = fopen(data_path, "r+");
+	char* data = mmap(NULL, data_size, PROT_READ | PROT_WRITE, MAP_PRIVATE, fileno(data_file), 0);
 	if (data == MAP_FAILED) {
 		printf("Unable to memory map data file (%d)", errno);
 		return EXIT_FAILURE;
@@ -32,16 +32,17 @@ int main(int argc, char** argv) {
 
 	printf("Data is at %p\n", data);
 
-	void* spilled_registers = malloc(4096);
+	int64_t* spilled_registers = malloc(4096);
 	if (spilled_registers == NULL) {
 		printf("Unable to allocate memory for spilled registers (%d)\n", errno);
 	}
 
 	printf("Spilled registers are at %p\n", spilled_registers);
+	spilled_registers[0] = 0;
 
 	size_t pc = entry_offset;
 
 	printf("Entry point is %lu\n", pc);
 
-	loop(data, opcode_offset_table, spilled_registers, pc);
+	loop(data, opcode_offset_table, &spilled_registers[1], pc, 1, argv);
 }

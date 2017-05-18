@@ -13,6 +13,9 @@ loop:
 	movq   %rsi, %rdx
 	movq   %rdi, %rax
 	lea    return(%rip), %rcx
+	pushq  %r9 # argv
+	pushq  %r8 # argc
+	pushq  %rcx # dummy rL
 	movzwq (%rax, %rbp), %rsi
 	jmp    *(%rdx, %rsi, 8)
 return:

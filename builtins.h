@@ -1,6 +1,10 @@
 #ifndef __BUILTINS_H__
 #define __BUILTINS_H__
 
+#include <stdint.h>
+
+typedef uint64_t sn_ptr_t;
+
 typedef struct {
 	int32_t id;
 	char* name;
@@ -23,7 +27,7 @@ typedef struct {
 	struct {
 		int64_t* offsets;
 	}* layout;
-	void* vtable;
+	sn_ptr_t* vtable;
 } sn_rtti_t;
 
 #endif /* __BUILTINS_H__ */
