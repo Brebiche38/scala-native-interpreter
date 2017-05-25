@@ -12,13 +12,16 @@ object GenAssembly {
   val builtins: Seq[(String, Int, Seq[Int])] = // Builtin names, return size (-1 = physical pointer), argument sizes (-1 == pointer)
     Seq(
       ("scalanative_init", 0, Seq()),
-      ("scalanative_alloc", -1, Seq(-1, 64)),
-      ("scalanative_field", 64, Seq(-1, -1, 32)),
+      ("scalanative_alloc", -1, Seq(64, 64)),
+      ("scalanative_field", 64, Seq(64, -1, 32)),
       ("scalanative_method_virtual", 64, Seq(-1, 32)),
-      ("scalanative_method_static", 64, Seq(-1)),
+      ("scalanative_method_static", 64, Seq(64)),
       ("scalanative_method_trait", 64, Seq(-1, -1, 32)),
       ("scalanative_is_class", 8, Seq(-1, -1)),
-      ("scalanative_is_trait", 8, Seq(-1, -1, 32))
+      ("scalanative_is_trait", 8, Seq(-1, -1, 32)),
+      ("scalanative_alloc_raw", -1, Seq(64)),
+      ("scalanative_alloc_raw_atomic", -1, Seq(64)),
+      ("llvm_memset", 0, Seq(-1, 8, 64, 32, 8))
       // ...
     )
 
@@ -75,26 +78,20 @@ object GenAssembly {
     case 2 => "%edi"
     case 3 => "%rdi"
   }
-  def getOperand(arg: BinArg, size: Int, tmp: Int => String, immOffset: Int, isCall: Boolean): (String, Int) = {
+  def getOperand(arg: BinArg, size: Int, tmp: Int => String, immOffset: Int): (String, Int) = {
     arg match {
       case Reg(r) => (reg(r, size), 0 + immOffset)
       case SReg   =>
         inst("xorq", Seq(tmp(3), tmp(3)))
         inst("movw", Seq(dataAt(rPC, immOffset), tmp(1)))
         (sReg(tmp(3)), 2 + immOffset)
-      case Mem    =>
-        if (!isCall) {
-          inst("movq", Seq(dataAt(rPC, immOffset), tmp(3)))
-          (dataAt(tmp(3), 0), 8 + immOffset)
-        } else {
-          (dataAt(rPC, immOffset), 8 + immOffset)
-        }
+      case Mem    => (dataAt(rPC, immOffset), 8 + immOffset)
       case Imm   => (dataAt(rPC, immOffset), sizeToBytes(size) + immOffset)
       case Nop   => (tmp(size), 0 + immOffset)
     }
   }
   def getOperandF(arg: BinArg, size: Int, tmp: Int => String, immOffset: Int, reg: String): (String, Int) = {
-    val (operand, off) = getOperand(arg, size + 2, tmp, immOffset, false)
+    val (operand, off) = getOperand(arg, size + 2, tmp, immOffset)
     size match {
       case 0 => 
         inst("movl", Seq(operand, tmp(2))) // Upper 32 bits are zeroed out on move
@@ -147,7 +144,7 @@ object GenAssembly {
   }
   def unary(opcode: String, size: Int, arg1: Byte, dest1: Boolean, popFlags: Boolean = false): Int = {
     val operation = op(opcode, size)
-    val (operand, off) = getOperand(if (dest1) dest(arg1) else arg(arg1), size, rTmp1, 2, false)
+    val (operand, off) = getOperand(if (dest1) dest(arg1) else arg(arg1), size, rTmp1, 2)
     if (popFlags) inst("popf", Seq())
     inst(operation, Seq(operand))
     off
@@ -159,10 +156,10 @@ object GenAssembly {
   def customBinary(operation: String, float1: Boolean, size1: Int, arg1: Byte, float2: Boolean, size2: Int, arg2: Byte, dest2: Boolean, pushFlags: Boolean = false): Int = {
     val (operand2, off2) =
       if (float2) getOperandF(if (dest2) dest(arg2) else arg(arg2), size2, rTmp2, 2, "%mm1")
-      else getOperand(if (dest2) dest(arg2) else arg(arg2), size2, rTmp2, 2, false)
+      else getOperand(if (dest2) dest(arg2) else arg(arg2), size2, rTmp2, 2)
     val (operand1, off1) =
       if (float1) getOperandF(arg(arg1), size1, rTmp1, off2, "%mm0")
-      else getOperand(arg(arg1), size1, rTmp1, off2, false)
+      else getOperand(arg(arg1), size1, rTmp1, off2)
     if (!float1 && !float2 && (!arg(arg1).isInstanceOf[Reg]) && (!dest(arg2).isInstanceOf[Reg])) {
       inst(op("mov", size2), Seq(operand2, rTmp2(size2)))
       inst(operation, Seq(operand1, rTmp2(size2)))
@@ -193,18 +190,35 @@ object GenAssembly {
 
       case 0x1 => // Stack
         if (p(opc, 2) != 0) throw new Exception()
-        val operand = p(opc, 1) & 0xc match {
+        val operation = p(opc, 1) & 0xc match {
           case 0x0 => "push"
           case 0x4 => "pop"
         }
         val size = p(opc, 1) & 0x3
-        (size, operand) match { // Most cases can be handled by moving too much stuff
-          case (0, "pop") | (2, "pop") if dest(p(opc, 3)) == Mem => // Need special care when popping to memory
-            val (operand, off) = getOperand(Mem, size, rTmp1, 2, false)
-            inst(op("pop", size + 1), Seq(rTmp2(size + 1)))
-            inst(op("mov", size), Seq(rTmp2(size), operand))
+        size match {
+          case 0 | 2 =>
+            val newOperation = op(operation, size + 1)
+            val (operand, off) = getOperand(arg(p(opc, 3)), size, rTmp1, 2)
+            operation match {
+              case "push" =>
+                inst(size match {
+                  case 0 => "movzbw"
+                  case 2 => "movl"
+                }, Seq(operand, rTmp1(size match {
+                  case 0 => 1
+                  case 2 => 2
+                })))
+                inst(newOperation, Seq(rTmp1(size + 1)))
+              case "pop" =>
+                inst(newOperation, Seq(rTmp2(size + 1)))
+                inst(size match {
+                  case 0 => "movb"
+                  case 2 => "movl"
+                }, Seq(rTmp2(size), operand))
+            }
             off
-          case _ => unary(operand, size | 0x1, p(opc, 3), operand == "pop")
+          case 1 | 3 =>
+            unary(operation, size, p(opc, 3), operation == "pop")
         }
 
       case 0x2 => // Memory
@@ -212,40 +226,39 @@ object GenAssembly {
         val size = p(opc, 1) & 0x3
         p(opc, 1) & 0x4 match {
           case 0x0 => // Store
-            val (operand2, off2) = getOperand(dest(p(opc, 2)), 3, rTmp2, 2, true) // Address
-            val (operand1, off1) = getOperand(arg(p(opc, 3)), size, rTmp1, off2, false) // Value
-            
+            val (address, off2) = getOperand(dest(p(opc, 2)), 3, rTmp2, 2) // Address
+            val (value, off1) = getOperand(arg(p(opc, 3)), size, rTmp1, off2) // Value
             (dest(p(opc, 2)), arg(p(opc, 3))) match {
               case (Reg(_), Reg(_)) =>
-                inst(op("mov", size), Seq(operand1, dataAt(operand2, 0)))
+                inst(op("mov", size), Seq(value, dataAt(address, 0)))
               case (Reg(_), _) =>
-                inst(op("mov", size), Seq(operand1, rTmp1(size)))
-                inst(op("mov", size), Seq(rTmp1(size), dataAt(rTmp2(3), 0)))
+                inst(op("mov", size), Seq(value, rTmp1(size)))
+                inst(op("mov", size), Seq(rTmp1(size), dataAt(address, 0)))
               case (_, Reg(_)) =>
-                inst("movq", Seq(operand2, rTmp2(3)))
-                inst(op("mov", size), Seq(operand1, dataAt(rTmp2(3), 0)))
+                inst("movq", Seq(address, rTmp2(3)))
+                inst(op("mov", size), Seq(value, dataAt(rTmp2(3), 0)))
               case _ =>
-                inst("movq", Seq(operand2, rTmp2(3)))
-                inst(op("mov", size), Seq(operand1, rTmp1(size)))
+                inst("movq", Seq(address, rTmp2(3)))
+                inst(op("mov", size), Seq(value, rTmp1(size)))
                 inst(op("mov", size), Seq(rTmp1(size), dataAt(rTmp2(3), 0)))                
             }
             off1
           case 0x4 => // Load
-            val (operand2, off2) = getOperand(dest(p(opc, 2)), size, rTmp2, 2, false) // Destination
-            val (operand1, off1) = getOperand(dest(p(opc, 3)), 3, rTmp1, off2, true) // Address
+            val (destination, off2) = getOperand(dest(p(opc, 2)), size, rTmp2, 2) // Destination
+            val (address, off1) = getOperand(dest(p(opc, 3)), 3, rTmp1, off2) // Address
             (dest(p(opc, 2)), dest(p(opc, 3))) match {
               case (Reg(_), Reg(_)) =>
-                inst(op("mov", size), Seq(dataAt(operand1, 0), operand2))
+                inst(op("mov", size), Seq(dataAt(address, 0), destination))
               case (Reg(_), _) =>
-                inst("movq", Seq(operand1, rTmp1(3)))
-                inst(op("mov", size), Seq(dataAt(rTmp1(3), 0), operand2))
+                inst("movq", Seq(address, rTmp1(3)))
+                inst(op("mov", size), Seq(dataAt(rTmp1(3), 0), destination))
               case (_, Reg(_)) =>
-                inst(op("mov", size), Seq(dataAt(operand1, 0), rTmp1(size)))
-                inst(op("mov", size), Seq(rTmp1(size), operand2))
+                inst(op("mov", size), Seq(dataAt(address, 0), rTmp1(size)))
+                inst(op("mov", size), Seq(rTmp1(size), destination))
               case _ =>
-                inst("movq", Seq(operand1, rTmp1(3)))
+                inst("movq", Seq(address, rTmp1(3)))
                 inst(op("mov", size), Seq(dataAt(rTmp1(3), 0), rTmp1(size)))
-                inst(op("mov", size), Seq(rTmp1(size), operand2))
+                inst(op("mov", size), Seq(rTmp1(size), destination))
             }
             off1
         }
@@ -273,15 +286,15 @@ object GenAssembly {
               case 0 => 1
               case _ => size
             }
-            val (operand2, off2) = getOperand(dest(p(opc, 2)), size, rTmp2, 2, false)
-            val (operand1, off1) = getOperand(arg(p(opc, 3)), mulSize, rTmp1, off2, false)
+            val (operand2, off2) = getOperand(dest(p(opc, 2)), size, rTmp2, 2)
+            val (operand1, off1) = getOperand(arg(p(opc, 3)), mulSize, rTmp1, off2)
             inst(op("mov", size), Seq(operand2, rTmp2(size)))
             inst(op("imul", mulSize), Seq(operand1, rTmp2(mulSize)))
             inst(op("mov", size), Seq(rTmp2(size), operand2))
             off1
           case ("imul", _, Reg(_), (SReg | Mem)) => // Can't multiply directly into memory
-            val (operand2, off2) = getOperand(dest(p(opc, 2)), size, rTmp2, 2, false)
-            val (operand1, off1) = getOperand(arg(p(opc, 3)), size, rTmp1, off2, false)
+            val (operand2, off2) = getOperand(dest(p(opc, 2)), size, rTmp2, 2)
+            val (operand1, off1) = getOperand(arg(p(opc, 3)), size, rTmp1, off2)
             inst(op("mov", size), Seq(operand2, rTmp2(size)))
             inst(op("imul", size), Seq(operand1, rTmp2(size)))
             inst(op("mov", size), Seq(rTmp2(size), operand2))
@@ -319,7 +332,7 @@ object GenAssembly {
             inst("pushq", Seq(rOOT))
 
             // Step 1: Put divided in rdx:rax
-            val (operand2, off2) = getOperand(dest(p(opc, 2)), size, rTmp2, 2, false)
+            val (operand2, off2) = getOperand(dest(p(opc, 2)), size, rTmp2, 2)
             inst(op("mov", size), Seq(operand2, rA(size)))
 
             // Step 2: Sign or zero extend divided
@@ -336,7 +349,7 @@ object GenAssembly {
             }
 
             // Step 3: Divide
-            val (operand1, off1) = getOperand(arg(p(opc, 3)), size, rTmp1, off2, false)
+            val (operand1, off1) = getOperand(arg(p(opc, 3)), size, rTmp1, off2)
             inst(op(if ((p(opc, 1) & 0x4) == 0x0) "idiv" else "div", size), Seq(operand1))
 
             // Step 4: Get result
@@ -373,7 +386,7 @@ object GenAssembly {
             inst("pushq", Seq(rOOT))
 
             // Step 1: Put divided in rdx:rax
-            val (operand2, off2) = getOperand(dest(p(opc, 2)), size, rTmp2, 2, false)
+            val (operand2, off2) = getOperand(dest(p(opc, 2)), size, rTmp2, 2)
             inst(op("mov", size), Seq(operand2, rA(size)))
 
             // Step 2: Sign or zero extend divided
@@ -390,7 +403,7 @@ object GenAssembly {
             }
 
             // Step 3: Divide
-            val (operand1, off1) = getOperand(arg(p(opc, 3)), size, rTmp1, off2, false)
+            val (operand1, off1) = getOperand(arg(p(opc, 3)), size, rTmp1, off2)
             inst(op("idiv", size), Seq(operand1))
 
             // Step 4: Get result
@@ -444,8 +457,8 @@ object GenAssembly {
 
         (arg(p(opc, 3)), dest(p(opc, 2))) match {
           case (Reg(_), (SReg | Mem)) => // Can't extend directly into memory
-            val (operand2, off2) = getOperand(dest(p(opc, 2)), s2, rTmp2, 2, false)
-            val (operand1, off1) = getOperand(arg(p(opc, 3)), s1, rTmp1, off2, false)
+            val (operand2, off2) = getOperand(dest(p(opc, 2)), s2, rTmp2, 2)
+            val (operand1, off1) = getOperand(arg(p(opc, 3)), s1, rTmp1, off2)
             inst(op("mov", s2), Seq(operand2, rTmp2(s2)))
             inst(operation, Seq(operand1, rTmp2(s2)))
             inst(op("mov", s2), Seq(rTmp2(s2), operand2))
@@ -467,7 +480,7 @@ object GenAssembly {
         }
         dest(p(opc, 2)) match {
           case SReg | Mem => // Can't convert directly into memory
-            val (operand2, off2) = getOperand(dest(p(opc, 2)), s2, rTmp2, 2, false)
+            val (operand2, off2) = getOperand(dest(p(opc, 2)), s2, rTmp2, 2)
             val (operand1, off1) = getOperandF(arg(p(opc, 3)), s1, rTmp1, off2, "%xmm0")
             inst(op("mov", s2), Seq(operand2, rTmp2(s2)))
             inst(operation, Seq("%xmm0", rTmp2(s2)))
@@ -488,7 +501,7 @@ object GenAssembly {
         size1 match {
           case 0 | 1 => // Can't convert from byte or word
             val (operand2, off2) = getOperandF(dest(p(opc, 2)), size2, rTmp2, 2, "%mm1")
-            val (operand1, off1) = getOperand(arg(p(opc, 3)), size1, rTmp1, off2, false)
+            val (operand1, off1) = getOperand(arg(p(opc, 3)), size1, rTmp1, off2)
             inst(op("movz", size1) + "l", Seq(operand1, rTmp1(2)))
             inst(operation, Seq(rTmp1(2), "%xmm1"))
             size2 match {
@@ -506,20 +519,25 @@ object GenAssembly {
         if (p(opc, 2) != 0) throw new Exception()
         p(opc, 1) match {
           case 0x0 => // Call
-            val (operand, off) = getOperand(arg(p(opc, 3)), 3, rTmp1, 2, true)
+            // Step 2: call function
+            val (operand, off) = getOperand(arg(p(opc, 3)), 3, rTmp1, 2)
             inst("pushq", Seq(rL))
             inst("movq", Seq(rPC, rL))
             inst("addq", Seq(imm(off), rL))
             inst("movq", Seq(operand, rPC))
           case 0x1 => // Jump
-            val (operand, off) = getOperand(arg(p(opc, 3)), 3, rTmp1, 2, true)
+            val (operand, off) = getOperand(arg(p(opc, 3)), 3, rTmp1, 2)
             inst("movq", Seq(operand, rPC))
           case 0x2 => // JumpIf
-            val (operand, off) = getOperand(arg(p(opc, 3)), 0, rTmp1, 2, false)
-            val (jumpdest, offd) = getOperand(Mem, 3, rTmp2, off, true)
-            inst("addq", Seq(imm(offd), rPC))
+            val (operand, off) = getOperand(arg(p(opc, 3)), 0, rTmp1, 2)
+            val (jumpdest, offd) = getOperand(Mem, 3, rTmp2, off)
+            inst("pushq", Seq(rOOT))
+            inst("movq", Seq(rPC, rOOT))
+            inst("addq", Seq(imm(offd), rOOT))
             inst("cmpb", Seq(imm(0), operand))
-            inst("cmovne", Seq(jumpdest, rPC))
+            inst("cmovne", Seq(jumpdest, rOOT))
+            inst("movq", Seq(rOOT, rPC))
+            inst("popq", Seq(rOOT))
         }
         -1
 
@@ -532,6 +550,10 @@ object GenAssembly {
             inst("movq", Seq(rL, rPC))
             // Restore previous rL
             inst("movq", Seq(offset(rReg, -24), rL))
+            // Restore registers
+            (0 until 7).foreach { idx =>
+              inst("movq", Seq(offset(rReg, -8 * (idx + 4)), reg(idx, 3)))
+            }
             // Restore register stack
             inst("movq", Seq(offset(rReg, -16), rReg))
           case 0xf => inst("ret", Seq()) // Return from tight loop function TODO restore state
@@ -563,18 +585,32 @@ object GenAssembly {
         }
 
       case 0xf if (p(opc, 1) == 0xf) => // Alloc
-        val (operand2, off2) = getOperand(dest(p(opc, 2)), 3, rTmp2, 2, false)
-        val (operand1, off1) = getOperand(arg(p(opc, 3)), 1, rTmp1, off2, false)
+        val (operand2, off2) = getOperand(dest(p(opc, 2)), 3, rTmp2, 2) // Destination
+        val (operand1, off1) = getOperand(arg(p(opc, 3)), 1, rTmp1, off2) // Size
+        inst("movswq", Seq(operand1, rTmp1(3)))
+        inst("addq", Seq(rTmp1(3), offset(rReg, -8)))
+        inst("movq", Seq(rReg, operand2))
+        inst("addq", Seq(rTmp1(3), operand2))
+        /*
         inst("movswq", Seq(operand1, rTmp1(3)))
         inst("addq", Seq(rTmp1(3), "%rsp"))
         inst("movq", Seq("%rsp", operand2))
+        */
         off1
 
       case 0xf if (p(opc, 1) == 0xe) => // Function header
+        // Step 1: compute new rReg
         inst("movq", Seq(offset(rReg, -8), rTmp1(3)))
-        inst("addq", Seq(imm(3), rTmp1(3)))
+        inst("addq", Seq(imm(11), rTmp1(3))) // 11 = (saved regs (8) + prev rL + prev rReg + size)
         inst("imulq", Seq(imm(8), rTmp1(3)))
-        inst("addq", Seq(rReg, rTmp1(3)))
+        inst("addq", Seq(rReg, rTmp1(3))) // rTmp1 holds the address of the first free slot
+
+        // Step 2: save registers
+        (0 until 7).foreach { idx =>
+          inst("movq", Seq(reg(idx, 3), offset(rTmp1(3), -8 * (idx + 4))))
+        }
+
+        // Step 3: create register stack
         inst("popq", Seq(offset(rTmp1(3), -24))) // Pop rL
         inst("movq", Seq(rReg, offset(rTmp1(3), -16)))
         inst("movq", Seq(imm(opc & 0xff), offset(rTmp1(3), -8)))
@@ -596,7 +632,7 @@ object GenAssembly {
 
         // Step 2: Put arguments in registers (max. 6 arguments)
         val argRegs = Seq("%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9")
-        argRegs.zip(args).reverse.foreach {
+        argRegs.zip(args).foreach {
           case (reg, -1) => // pointer
             inst("popq", Seq(reg)) // Upper bytes will be ignored on smaller sizes
             inst("addq", Seq(rCode, reg)) // Convert bytecode address to physical address
