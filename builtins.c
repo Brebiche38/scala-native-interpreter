@@ -14,7 +14,7 @@ void scalanative_init(void) {
 	return;
 }
 
-void* scalanative_alloc(sn_ptr_t rtti, int64_t size) { // TODO rtti really useful?
+void* scalanative_alloc(sn_ptr_t rtti, int64_t size) {
 	printf("size: %lld, rtti %llx\n", size, rtti);
 	sn_ptr_t* allocated = (sn_ptr_t*) malloc(size);
 	if (allocated == NULL) {
@@ -29,43 +29,52 @@ void* scalanative_alloc(sn_ptr_t rtti, int64_t size) { // TODO rtti really usefu
 }
 
 sn_ptr_t scalanative_field(sn_ptr_t obj, sn_rtti_t* rtti, int32_t id) {
-	printf("obj at %llx, rtti at %p, id is %d", obj, rtti, id);
-	int64_t* offsets = data_at(*((sn_ptr_t*) data_at(rtti->layout)));
-	printf("field at %llx\n", obj + offsets[id] + 8);
-	return obj + offsets[id] + 8;
+	printf("obj at %llx, rtti at %p, id is %d\n", obj, rtti, id);
+	uint64_t* offsets = data_at(*((sn_ptr_t*) data_at(rtti->layout)));
+	printf("field at %llx\n", obj + offsets[id]);
+	return obj + offsets[id];
 }
 
 sn_ptr_t scalanative_method_virtual(sn_ptr_t* obj, int32_t id) {
+	printf("Getting virtual method from obj %p at id %d, rtti is %llx\n", obj, id, *obj);
 	sn_rtti_t* rtti = data_at(*obj);
-	sn_ptr_t* vtable = data_at(rtti->vtable);
-	return vtable[id];
+	printf("Method is at %llx\n", rtti->vtable[id]);
+	return rtti->vtable[id];
 }
 
 sn_ptr_t scalanative_method_static(sn_ptr_t method) {
 	return method; // TODO really? deref?
 }
 
-sn_ptr_t scalanative_method_trait(sn_type_t** obj, sn_ptr_t** dispatchTable, int32_t offset) {
-	int32_t id = (*obj)->id;
-	return dispatchTable[offset][id];
+sn_ptr_t scalanative_method_trait(sn_ptr_t* obj, sn_ptr_t* dispatchTable, int32_t offset) {
+	printf("Getting trait method from obj %p at offset %d\n", obj, offset);
+	sn_type_t* type = data_at(*obj);
+	printf("Method is at %llx\n", *(dispatchTable + offset + type->id));
+	return *(dispatchTable + offset + type->id);
 }
 
-int8_t scalanative_is_class(sn_ptr_t* obj, sn_rtti_t *rtti) {
-	sn_range_t* range = (sn_range_t*) (data + rtti->range);
-	if (range->last - range->first == 0) {
-		return rtti->type == *obj;
+int8_t scalanative_is_class(sn_ptr_t* obj, sn_rtti_t *ref_rtti) {
+	return 1/0;
+	/*
+	sn_rtti_t* obj_rtti = data_at(*obj);
+	if (ref_rtti->range.last - ref_rtti->range.first == 0) {
+		return ref_rtti->type == obj_rtti->type;
 	} else {
-		int32_t id = ((sn_type_t *) (data + *obj))->id;
-		return (id > range->first && id < range->last);
+		return (obj_rtti->type.id >= ref_rtti->range.first && obj_rtti->type.id <= ref_rtti->range.last);
 	}
+	*/
 }
 
 int8_t scalanative_is_trait(sn_type_t** obj, int8_t** classHasTrait, int32_t traitId) {
+	return 1/0;
+	/*
 	int32_t classId = (*obj)->id;
 	return classHasTrait[classId][traitId];
+	*/
 }
 
 void* scalanative_alloc_raw(int64_t size) {
+	printf("Memory allocating (%lld bytes)\n", size);
 	void* allocated = malloc(size);
 	if (allocated == NULL) {
 		exit(-1);
@@ -77,6 +86,7 @@ void* scalanative_alloc_raw(int64_t size) {
 }
 
 void* scalanative_alloc_raw_atomic(int64_t size) {
+	printf("Memory atomically allocating (%lld bytes)\n", size);
 	void* allocated = malloc(size);
 	if (allocated == NULL) {
 		exit(-1);
@@ -88,7 +98,7 @@ void* scalanative_alloc_raw_atomic(int64_t size) {
 }
 
 void llvm_memset(int8_t* dest, int8_t val, int64_t len, int32_t align, int8_t is_volatile) {
-	printf("Memsetting %p\n", dest);
+	printf("Memsetting %p, %lld bytes\n", dest, len);
 	for (int i = 0; i < len; ++i) {
 		dest[i] = val;
 	}

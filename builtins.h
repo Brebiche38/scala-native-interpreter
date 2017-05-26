@@ -7,7 +7,7 @@ typedef uint64_t sn_ptr_t;
 
 typedef struct {
 	int32_t id;
-	sn_ptr_t name; // string
+	sn_ptr_t name;
 	int8_t kind;
 } sn_type_t;
 
@@ -24,12 +24,12 @@ typedef struct {
 } sn_dynmap_t;
 
 typedef struct {
-	sn_ptr_t type; // sn_type_t
+	sn_type_t type;
 	int64_t size;
-	sn_ptr_t range; // sn_range_t
-	sn_ptr_t dynmap; // sn_dynmap_t
-	sn_ptr_t layout; // array[int64_t]
-	sn_ptr_t vtable; // array[sn_ptr_t]
+	sn_range_t range;
+	sn_dynmap_t dynmap;
+	sn_ptr_t layout;
+	sn_ptr_t vtable[0];
 } sn_rtti_t;
 
 #endif /* __BUILTINS_H__ */

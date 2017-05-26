@@ -631,13 +631,15 @@ object GenAssembly {
         }
 
         // Step 2: Put arguments in registers (max. 6 arguments)
-        val argRegs = Seq("%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9")
+        val argRegs = Seq(("%rdi", "%di"), ("%rsi", "%si"), ("%rdx", "%dx"), ("%rcx", "%cx"), ("%r8", "%r8w"), ("%r9", "%r9w"))
         argRegs.zip(args).foreach {
           case (reg, -1) => // pointer
-            inst("popq", Seq(reg)) // Upper bytes will be ignored on smaller sizes
-            inst("addq", Seq(rCode, reg)) // Convert bytecode address to physical address
-          case (reg, _) => // normal value
-            inst("popq", Seq(reg)) // Upper bytes will be ignored on smaller sizes
+            inst("popq", Seq(reg._1)) // Upper bytes will be ignored on smaller sizes
+            inst("addq", Seq(rCode, reg._1)) // Convert bytecode address to physical address
+          case (reg, 8 | 16) => // normal value
+            inst("popw", Seq(reg._2)) // Upper bytes will be ignored on smaller sizes
+          case (reg, 32 | 64) =>
+            inst("popq", Seq(reg._1))
         }
 
         // Step 3: Call function

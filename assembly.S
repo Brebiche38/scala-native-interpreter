@@ -101572,10 +101572,10 @@ assembly_f00a:
     movq %r15, 104(%rbx) # assembly_f00a
     popq %rdi # assembly_f00a
     addq %rax, %rdi # assembly_f00a
-    popq %rsi # assembly_f00a
+    popw %si # assembly_f00a
     popq %rdx # assembly_f00a
     popq %rcx # assembly_f00a
-    popq %r8 # assembly_f00a
+    popw %r8w # assembly_f00a
     call _llvm_memset # assembly_f00a
     movq 8(%rbx), %rax # assembly_f00a
     movq 16(%rbx), %rbx # assembly_f00a
