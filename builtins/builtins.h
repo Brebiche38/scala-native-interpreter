@@ -28,6 +28,7 @@ typedef struct {
 	int64_t size;
 	sn_range_t range;
 	sn_dynmap_t dynmap;
+	sn_ptr_t ref_layout;
 	sn_ptr_t layout;
 	sn_ptr_t vtable[0];
 } sn_rtti_t;

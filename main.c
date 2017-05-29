@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <sys/mman.h>
 
-#include "builtins.h"
+#include "builtins/builtins.h"
 
 #define PATH "/Users/work/Documents/Interpreter/scala-native/sandbox/target/scala-2.11/native/bin.nbc"
 

@@ -101594,6 +101594,47 @@ assembly_f00a:
     addq $2, %rbp # assembly_f00a
     movzwq (%rax,%rbp), %rsi # assembly_f00a
     jmp *(%rdx,%rsi,8)
+.globl assembly_f00b
+assembly_f00b:
+    movq -8(%rbx), %rsi # assembly_f00b
+    imulq $8, %rsi # assembly_f00b
+    addq %rbx, %rsi # assembly_f00b
+    movq %rbx, (%rsi) # assembly_f00b
+    movq %rsi, %rbx # assembly_f00b
+    movq %rax, 8(%rbx) # assembly_f00b
+    movq %rbx, 16(%rbx) # assembly_f00b
+    movq %rcx, 24(%rbx) # assembly_f00b
+    movq %rdx, 32(%rbx) # assembly_f00b
+    movq %rbp, 40(%rbx) # assembly_f00b
+    movq %r8, 48(%rbx) # assembly_f00b
+    movq %r9, 56(%rbx) # assembly_f00b
+    movq %r10, 64(%rbx) # assembly_f00b
+    movq %r11, 72(%rbx) # assembly_f00b
+    movq %r12, 80(%rbx) # assembly_f00b
+    movq %r13, 88(%rbx) # assembly_f00b
+    movq %r14, 96(%rbx) # assembly_f00b
+    movq %r15, 104(%rbx) # assembly_f00b
+    popq %rdi # assembly_f00b
+    addq %rax, %rdi # assembly_f00b
+    call _scalanative_unwind_get_context # assembly_f00b
+    pushq %rax # assembly_f00b
+    movq 8(%rbx), %rax # assembly_f00b
+    movq 16(%rbx), %rbx # assembly_f00b
+    movq 24(%rbx), %rcx # assembly_f00b
+    movq 32(%rbx), %rdx # assembly_f00b
+    movq 40(%rbx), %rbp # assembly_f00b
+    movq 48(%rbx), %r8 # assembly_f00b
+    movq 56(%rbx), %r9 # assembly_f00b
+    movq 64(%rbx), %r10 # assembly_f00b
+    movq 72(%rbx), %r11 # assembly_f00b
+    movq 80(%rbx), %r12 # assembly_f00b
+    movq 88(%rbx), %r13 # assembly_f00b
+    movq 96(%rbx), %r14 # assembly_f00b
+    movq 104(%rbx), %r15 # assembly_f00b
+    movq (%rbx), %rbx # assembly_f00b
+    addq $2, %rbp # assembly_f00b
+    movzwq (%rax,%rbp), %rsi # assembly_f00b
+    jmp *(%rdx,%rsi,8)
 .globl assembly_fe00
 assembly_fe00:
     movq -8(%rbx), %rsi # assembly_fe00

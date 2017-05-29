@@ -11592,6 +11592,7 @@ extern void* assembly_f007 asm("assembly_f007");
 extern void* assembly_f008 asm("assembly_f008");
 extern void* assembly_f009 asm("assembly_f009");
 extern void* assembly_f00a asm("assembly_f00a");
+extern void* assembly_f00b asm("assembly_f00b");
 extern void* assembly_fe00 asm("assembly_fe00");
 extern void* assembly_fe01 asm("assembly_fe01");
 extern void* assembly_fe02 asm("assembly_fe02");

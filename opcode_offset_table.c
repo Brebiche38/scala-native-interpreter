@@ -61453,7 +61453,7 @@ void* opcode_offset_table[65536] = {
     &assembly_f008, 
     &assembly_f009, 
     &assembly_f00a, 
-    NULL, 
+    &assembly_f00b, 
     NULL, 
     NULL, 
     NULL, 

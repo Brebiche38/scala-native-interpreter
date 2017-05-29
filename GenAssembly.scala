@@ -21,7 +21,8 @@ object GenAssembly {
       ("scalanative_is_trait", 8, Seq(-1, -1, 32)),
       ("scalanative_alloc_raw", -1, Seq(64)),
       ("scalanative_alloc_raw_atomic", -1, Seq(64)),
-      ("llvm_memset", 0, Seq(-1, 8, 64, 32, 8))
+      ("llvm_memset", 0, Seq(-1, 8, 64, 32, 8)),
+      ("scalanative_unwind_get_context", 32, Seq(-1))
       // ...
     )
 

@@ -10,6 +10,7 @@ void* data_at(sn_ptr_t addr) {
 	return (void*) (data + addr);
 }
 
+/*
 void scalanative_init(void) {
 	return;
 }
@@ -27,10 +28,12 @@ void* scalanative_alloc(sn_ptr_t rtti, int64_t size) {
 
 	return allocated;
 }
+*/
 
 sn_ptr_t scalanative_field(sn_ptr_t obj, sn_rtti_t* rtti, int32_t id) {
 	printf("obj at %llx, rtti at %p, id is %d\n", obj, rtti, id);
-	uint64_t* offsets = data_at(*((sn_ptr_t*) data_at(rtti->layout)));
+	uint64_t* offsets = data_at(rtti->layout);
+	printf("offsets at %p\n", offsets);
 	printf("field at %llx\n", obj + offsets[id]);
 	return obj + offsets[id];
 }
@@ -49,23 +52,31 @@ sn_ptr_t scalanative_method_static(sn_ptr_t method) {
 sn_ptr_t scalanative_method_trait(sn_ptr_t* obj, sn_ptr_t* dispatchTable, int32_t offset) {
 	printf("Getting trait method from obj %p at offset %d\n", obj, offset);
 	sn_type_t* type = data_at(*obj);
+	printf("Method ptr is at %p, id is %d\n", dispatchTable + offset + type->id, type->id);
 	printf("Method is at %llx\n", *(dispatchTable + offset + type->id));
 	return *(dispatchTable + offset + type->id);
 }
 
 int8_t scalanative_is_class(sn_ptr_t* obj, sn_rtti_t *ref_rtti) {
-	return 1/0;
-	/*
-	sn_rtti_t* obj_rtti = data_at(*obj);
-	if (ref_rtti->range.last - ref_rtti->range.first == 0) {
-		return ref_rtti->type == obj_rtti->type;
-	} else {
-		return (obj_rtti->type.id >= ref_rtti->range.first && obj_rtti->type.id <= ref_rtti->range.last);
+	if (obj == data) {
+		printf("Null pointer\n");
+		return 0;
 	}
-	*/
+	printf("Object is at %p\n", obj);
+	sn_rtti_t* obj_rtti = data_at(*obj);
+	printf("Object has id %d, first in range is %d, last in range is %d\n", obj_rtti->type.id, ref_rtti->range.first, ref_rtti->range.last);
+	int8_t ret;
+	if (ref_rtti->range.last - ref_rtti->range.first == 0) {
+		ret = ref_rtti->type.id == obj_rtti->type.id;
+	} else {
+		ret = (obj_rtti->type.id >= ref_rtti->range.first && obj_rtti->type.id <= ref_rtti->range.last);
+	}
+	printf("Object is class: %d\n", ret);
+	return ret;
 }
 
 int8_t scalanative_is_trait(sn_type_t** obj, int8_t** classHasTrait, int32_t traitId) {
+	printf("------------is trait\n");
 	return 1/0;
 	/*
 	int32_t classId = (*obj)->id;
