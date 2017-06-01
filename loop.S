@@ -13,12 +13,14 @@ loop:
 	movq   %rsi, %rdx
 	movq   %rdi, %rax
 	lea    return(%rip), %rcx
+	subq   %rax, %rcx
 	pushq  %r9 # argv
 	pushq  %r8 # argc
 	pushq  %rcx # dummy rL
 	movzwq (%rax, %rbp), %rsi
 	jmp    *(%rdx, %rsi, 8)
 return:
+	popq   %rax
 	popq   %r15
 	popq   %r14
 	popq   %r13

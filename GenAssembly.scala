@@ -9,20 +9,29 @@ object GenAssembly {
 
   val buffer: mutable.UnrolledBuffer[String] = mutable.UnrolledBuffer.empty[String]
 
-  val builtins: Seq[(String, Int, Seq[Int])] = // Builtin names, return size (-1 = physical pointer), argument sizes (-1 == pointer)
+  val builtins: Seq[(String, Int, Seq[Int])] = // Builtin names, return size (-1 = physical pointer), argument sizes (-1 == physical pointer)
     Seq(
       ("scalanative_init", 0, Seq()),
       ("scalanative_alloc", -1, Seq(64, 64)),
       ("scalanative_field", 64, Seq(64, -1, 32)),
       ("scalanative_method_virtual", 64, Seq(-1, 32)),
       ("scalanative_method_static", 64, Seq(64)),
-      ("scalanative_method_trait", 64, Seq(-1, -1, 32)),
+      ("scalanative_method_trait", 64, Seq(-1, -1, 32, 32)),
       ("scalanative_is_class", 8, Seq(-1, -1)),
       ("scalanative_is_trait", 8, Seq(-1, -1, 32)),
-      ("scalanative_alloc_raw", -1, Seq(64)),
-      ("scalanative_alloc_raw_atomic", -1, Seq(64)),
+      ("scalanative_alloc", -1, Seq(64, 64)),
+      ("scalanative_alloc_atomic", -1, Seq(64, 64)),
       ("llvm_memset", 0, Seq(-1, 8, 64, 32, 8)),
-      ("scalanative_unwind_get_context", 32, Seq(-1))
+      ("scalanative_unwind_get_context", 32, Seq(-1)),
+      ("scalanative_unwind_init_local", 32, Seq(-1, -1)),
+      ("scalanative_unwind_step", 32, Seq(-1)),
+      ("scalanative_unwind_get_proc_name", 32, Seq(-1, -1, 64, -1)),
+      ("llvm_ctpop", 32, Seq(32)),
+      ("llvm_bswap", 32, Seq(32)),
+      ("llvm_ctlz", 32, Seq(32)),
+      ("elem", 0, Seq(64, 64, 64, 64)),
+      ("scalanative_platform_is_windows", 8, Seq()),
+      ("scalanative_environ", -1, Seq())
       // ...
     )
 
@@ -54,7 +63,7 @@ object GenAssembly {
     case r if r < 8 => Reg(r)
     case 0x8        => SReg
     case 0x9        => Nop
-    case 0xf        => Mem
+    //case 0xf        => Mem
   }
 
   // %rax, %rdx, %rsp are used in special cases
@@ -161,7 +170,7 @@ object GenAssembly {
     val (operand1, off1) =
       if (float1) getOperandF(arg(arg1), size1, rTmp1, off2, "%mm0")
       else getOperand(arg(arg1), size1, rTmp1, off2)
-    if (!float1 && !float2 && (!arg(arg1).isInstanceOf[Reg]) && (!dest(arg2).isInstanceOf[Reg])) {
+    if (!float1 && !float2 && (!arg(arg1).isInstanceOf[Reg]) && (!arg(arg2).isInstanceOf[Reg])) {
       inst(op("mov", size2), Seq(operand2, rTmp2(size2)))
       inst(operation, Seq(operand1, rTmp2(size2)))
       if (pushFlags) inst("pushf", Seq())
@@ -264,6 +273,24 @@ object GenAssembly {
             off1
         }
 
+      case (0x3 | 0x4 | 0x5) if ((p(opc, 1) & 0xc) == 0xc) => // Shifts
+        val operand = p(opc, 0) match {
+          case 0x3 => "shl"
+          case 0x4 => "shr"
+          case 0x5 => "sar"
+        }
+        val size = p(opc, 1) & 0x3
+        
+        val (operand2, off2) = getOperand(dest(p(opc, 2)), size, rTmp2, 2)
+        val (operand1, off1) = getOperand(arg(p(opc, 3)), 0, rTmp1, off2)
+        
+        inst("pushq", Seq("%rcx"))
+        inst("movb", Seq(operand1, "%cl"))
+        inst(op(operand, size), Seq("%cl", operand2))
+        inst("popq", Seq("%rcx"))
+
+        off1
+
       case 0x3 => // Bitwise arithmetic
         val operand = p(opc, 1) & 0xc match {
           case 0x0 => "and"
@@ -328,13 +355,18 @@ object GenAssembly {
         }
         p(opc, 1) & 0x8 match {
           case 0x0 => // Integer division
+            // Step -1: Get operands so we can dispose of rax
+            val (operand2, off2) = getOperand(dest(p(opc, 2)), size, rTmp2, 2)
+            inst(op("mov", size), Seq(operand2, rTmp2(size)))
+            val (operand1, off1) = getOperand(arg(p(opc, 3)), size, rTmp1, off2)
+            inst(op("mov", size), Seq(operand1, rTmp1(size)))
+
             // Step 0: Save rax and rdx
             inst("pushq", Seq(rCode))
             inst("pushq", Seq(rOOT))
 
             // Step 1: Put divided in rdx:rax
-            val (operand2, off2) = getOperand(dest(p(opc, 2)), size, rTmp2, 2)
-            inst(op("mov", size), Seq(operand2, rA(size)))
+            inst(op("mov", size), Seq(rTmp2(size), rA(size)))
 
             // Step 2: Sign or zero extend divided
             p(opc, 1) & 0x4 match {
@@ -350,19 +382,21 @@ object GenAssembly {
             }
 
             // Step 3: Divide
-            val (operand1, off1) = getOperand(arg(p(opc, 3)), size, rTmp1, off2)
-            inst(op(if ((p(opc, 1) & 0x4) == 0x0) "idiv" else "div", size), Seq(operand1))
+            inst(op(if ((p(opc, 1) & 0x4) == 0x0) "idiv" else "div", size), Seq(rTmp1(size)))
 
             // Step 4: Get result
-            inst(op("mov", size), Seq(rA(size), operand2))
+            inst(op("mov", size), Seq(rA(size), rTmp2(size)))
 
             // Step 5: Restore rax and rdx
             inst("popq", Seq(rOOT))
             inst("popq", Seq(rCode))
 
+            // Step 6: Store result
+            inst(op("mov", size), Seq(rTmp2(size), operand2))
+
             off1
           case 0x8 => // Floating-point division
-            if (size > 1) throw new Exception()
+            if (size > 1 || (p(opc, 1) & 0x4) == 1) throw new Exception()
             binaryF("div", size, p(opc, 3), p(opc, 2))
         }
 
@@ -382,13 +416,18 @@ object GenAssembly {
         }
         p(opc, 1) & 0x8 match {
           case 0x0 => // Integer modulo
+            // Step -1: Get operands so we can dispose of rax
+            val (operand2, off2) = getOperand(dest(p(opc, 2)), size, rTmp2, 2)
+            inst(op("mov", size), Seq(operand2, rTmp2(size)))
+            val (operand1, off1) = getOperand(arg(p(opc, 3)), size, rTmp1, off2)
+            inst(op("mov", size), Seq(operand1, rTmp1(size)))
+
             // Step 0: Save rax and rdx
             inst("pushq", Seq(rCode))
             inst("pushq", Seq(rOOT))
 
             // Step 1: Put divided in rdx:rax
-            val (operand2, off2) = getOperand(dest(p(opc, 2)), size, rTmp2, 2)
-            inst(op("mov", size), Seq(operand2, rA(size)))
+            inst(op("mov", size), Seq(rTmp2(size), rA(size)))
 
             // Step 2: Sign or zero extend divided
             p(opc, 1) & 0x4 match {
@@ -404,15 +443,17 @@ object GenAssembly {
             }
 
             // Step 3: Divide
-            val (operand1, off1) = getOperand(arg(p(opc, 3)), size, rTmp1, off2)
-            inst(op("idiv", size), Seq(operand1))
+            inst(op("idiv", size), Seq(rTmp1(size)))
 
             // Step 4: Get result
-            inst(op("mov", size), Seq(rD(size), operand2))
+            inst(op("mov", size), Seq(rD(size), rTmp2(size)))
 
             // Step 5: Restore rax and rdx
             inst("popq", Seq(rOOT))
             inst("popq", Seq(rCode))
+
+            // Step 6: Store result
+            inst(op("mov", size), Seq(rTmp2(size), operand2))
 
             off1
           case 0x8 => // Floating-point modulo
@@ -425,12 +466,12 @@ object GenAssembly {
         p(opc, 1) & 0x8 match {
           case 0x0 =>
             val destsize = p(opc, 1) match {
-              case 0x0 => 8
-              case 0x1 => 8
-              case 0x2 => 8
-              case 0x3 => 16
-              case 0x4 => 16
-              case 0x5 => 32
+              case 0x0 => 0
+              case 0x1 => 0
+              case 0x2 => 0
+              case 0x3 => 1
+              case 0x4 => 1
+              case 0x5 => 2
             }
             binary("mov", destsize, p(opc, 3), p(opc, 2))
           case 0x8 =>
@@ -536,7 +577,7 @@ object GenAssembly {
             inst("movq", Seq(rPC, rOOT))
             inst("addq", Seq(imm(offd), rOOT))
             inst("cmpb", Seq(imm(0), operand))
-            inst("cmovne", Seq(jumpdest, rOOT))
+            inst("cmovneq", Seq(jumpdest, rOOT))
             inst("movq", Seq(rOOT, rPC))
             inst("popq", Seq(rOOT))
         }
@@ -552,7 +593,7 @@ object GenAssembly {
             // Restore previous rL
             inst("movq", Seq(offset(rReg, -24), rL))
             // Restore registers
-            (0 until 7).foreach { idx =>
+            (0 until 8).foreach { idx =>
               inst("movq", Seq(offset(rReg, -8 * (idx + 4)), reg(idx, 3)))
             }
             // Restore register stack
@@ -587,16 +628,16 @@ object GenAssembly {
 
       case 0xf if (p(opc, 1) == 0xf) => // Alloc
         val (operand2, off2) = getOperand(dest(p(opc, 2)), 3, rTmp2, 2) // Destination
+        inst("movq", Seq(offset(rReg, -8), rTmp1(3)))
+        inst("imulq", Seq(imm(8), rTmp1(3)))
+        inst("addq", Seq(rReg, rTmp1(3)))
+        inst("movq", Seq(rTmp1(3), operand2))
+        inst("subq", Seq(rCode, operand2))
+
         val (operand1, off1) = getOperand(arg(p(opc, 3)), 1, rTmp1, off2) // Size
-        inst("movswq", Seq(operand1, rTmp1(3)))
+        inst("movzwq", Seq(operand1, rTmp1(3)))
         inst("addq", Seq(rTmp1(3), offset(rReg, -8)))
-        inst("movq", Seq(rReg, operand2))
-        inst("addq", Seq(rTmp1(3), operand2))
-        /*
-        inst("movswq", Seq(operand1, rTmp1(3)))
-        inst("addq", Seq(rTmp1(3), "%rsp"))
-        inst("movq", Seq("%rsp", operand2))
-        */
+
         off1
 
       case 0xf if (p(opc, 1) == 0xe) => // Function header
@@ -607,7 +648,7 @@ object GenAssembly {
         inst("addq", Seq(rReg, rTmp1(3))) // rTmp1 holds the address of the first free slot
 
         // Step 2: save registers
-        (0 until 7).foreach { idx =>
+        (0 until 8).foreach { idx =>
           inst("movq", Seq(reg(idx, 3), offset(rTmp1(3), -8 * (idx + 4))))
         }
 
@@ -635,7 +676,7 @@ object GenAssembly {
         val argRegs = Seq(("%rdi", "%di"), ("%rsi", "%si"), ("%rdx", "%dx"), ("%rcx", "%cx"), ("%r8", "%r8w"), ("%r9", "%r9w"))
         argRegs.zip(args).foreach {
           case (reg, -1) => // pointer
-            inst("popq", Seq(reg._1)) // Upper bytes will be ignored on smaller sizes
+            inst("popq", Seq(reg._1))
             inst("addq", Seq(rCode, reg._1)) // Convert bytecode address to physical address
           case (reg, 8 | 16) => // normal value
             inst("popw", Seq(reg._2)) // Upper bytes will be ignored on smaller sizes
@@ -647,8 +688,12 @@ object GenAssembly {
         inst("call", Seq("_" + name))
 
         // Step 4: Get return value
-        if (ret != 0) {
-          inst("pushq", Seq("%rax")) // Upper bytes will be ignored on smaller sizes
+        ret match {
+          case 8 | 16 =>
+            inst("pushw", Seq("%ax"))
+          case 32 | 64 | -1 =>
+            inst("pushq", Seq("%rax"))
+          case _ => ()
         }
 
         // Step 5: Restore state
@@ -687,7 +732,7 @@ object GenAssembly {
         hbw.write("extern void* assembly_" + String.format("%04x", x: Integer) + " asm(\"assembly_" + String.format("%04x", x: Integer) + "\");\n")
         cbw.write("    &assembly_" + String.format("%04x", x: Integer) + ", \n")
       } catch {
-        case _ =>
+        case _: Throwable =>
           cbw.write("    NULL, \n")
       }
     }

@@ -3,10 +3,13 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <sys/mman.h>
+#include <unistd.h>
 
 #include "builtins/builtins.h"
 
 #define PATH "/Users/work/Documents/Interpreter/scala-native/sandbox/target/scala-2.11/native/bin.nbc"
+#define SPILLED_SIZE (1024 * 1024 * 1024)
+#define PAGE_SIZE getpagesize()
 
 extern int loop(void* data, void* oot, void* spr, size_t entry, int argc, sn_ptr_t argv) asm("loop");
 extern void* opcode_offset_table[65536];
@@ -32,13 +35,16 @@ int main(int argc, char** argv) {
 
 	printf("Data is at %p\n", data);
 
-	int64_t* spilled_registers = malloc(8192);
+	int64_t* spilled_registers = malloc(SPILLED_SIZE);
 	if (spilled_registers == NULL) {
 		printf("Unable to allocate memory for spilled registers (%d)\n", errno);
 	}
+	mprotect(spilled_registers + SPILLED_SIZE - PAGE_SIZE, PAGE_SIZE, PROT_NONE);
 
 	printf("Spilled registers are at %p\n", spilled_registers);
-	spilled_registers[0] = 0;
+	spilled_registers[0] = 0; // fake rL
+	spilled_registers[1] = 0; // fake previous rReg
+	spilled_registers[2] = 0; // fake size
 
 	size_t pc = entry_offset;
 
@@ -51,5 +57,5 @@ int main(int argc, char** argv) {
 
 	printf("newargv is %lx, newargv[0] is %llx, nullstr is %p\n", ((char*) newargv) - data, newargv[0], nullstr);
 
-	loop(data, opcode_offset_table, &spilled_registers[1], pc, 1, ((char*) newargv) - data);
+	loop(data, opcode_offset_table, &spilled_registers[3], pc, 1, ((char*) newargv) - data);
 }
