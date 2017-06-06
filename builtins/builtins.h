@@ -33,4 +33,6 @@ typedef struct {
 	sn_ptr_t vtable[0];
 } sn_rtti_t;
 
+void* data_at(sn_ptr_t addr);
+
 #endif /* __BUILTINS_H__ */

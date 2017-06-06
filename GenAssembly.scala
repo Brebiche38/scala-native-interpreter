@@ -11,7 +11,7 @@ object GenAssembly {
 
   val builtins: Seq[(String, Int, Seq[Int])] = // Builtin names, return size (-1 = physical pointer), argument sizes (-1 == physical pointer)
     Seq(
-      ("scalanative_init", 0, Seq()),
+      ("scalanative_init", 64, Seq()),
       ("scalanative_alloc", -1, Seq(64, 64)),
       ("scalanative_field", 64, Seq(64, -1, 32)),
       ("scalanative_method_virtual", 64, Seq(-1, 32)),
@@ -21,7 +21,7 @@ object GenAssembly {
       ("scalanative_is_trait", 8, Seq(-1, -1, 32)),
       ("scalanative_alloc", -1, Seq(64, 64)),
       ("scalanative_alloc_atomic", -1, Seq(64, 64)),
-      ("llvm_memset", 0, Seq(-1, 8, 64, 32, 8)),
+      ("llvm_memset", 64, Seq(-1, 8, 64, 32, 8)),
       ("scalanative_unwind_get_context", 32, Seq(-1)),
       ("scalanative_unwind_init_local", 32, Seq(-1, -1)),
       ("scalanative_unwind_step", 32, Seq(-1)),
@@ -29,9 +29,17 @@ object GenAssembly {
       ("llvm_ctpop", 32, Seq(32)),
       ("llvm_bswap", 32, Seq(32)),
       ("llvm_ctlz", 32, Seq(32)),
-      ("elem", 0, Seq(64, 64, 64, 64)),
+      ("elem", 64, Seq(64, 64, 64, 64)),
       ("scalanative_platform_is_windows", 8, Seq()),
-      ("scalanative_environ", -1, Seq())
+      ("scalanative_environ", -1, Seq()),
+      ("scalanative_strlen", 64, Seq(-1)),
+      ("llvm_memmove", 64, Seq(-1, -1, 64, 32, 8)),
+      ("stacktrace_in", 64, Seq(64)),
+      ("stacktrace_out", 64, Seq()),
+      ("scalanative_stdin_fileno", 32, Seq()),
+      ("scalanative_stdout_fileno", 32, Seq()),
+      ("scalanative_stderr_fileno", 32, Seq()),
+      ("write", 32, Seq(32, -1, 64))
       // ...
     )
 
@@ -164,27 +172,43 @@ object GenAssembly {
   def binaryF(opcode: String, size: Int, arg1: Byte, arg2: Byte): Int =
     customBinary(opF(opcode, size), true, size, arg1, true, size, arg2, true)
   def customBinary(operation: String, float1: Boolean, size1: Int, arg1: Byte, float2: Boolean, size2: Int, arg2: Byte, dest2: Boolean, pushFlags: Boolean = false): Int = {
+    val binArg1 = arg(arg1)
+    val binArg2 = if (dest2) dest(arg2) else arg(arg2)
     val (operand2, off2) =
-      if (float2) getOperandF(if (dest2) dest(arg2) else arg(arg2), size2, rTmp2, 2, "%mm1")
-      else getOperand(if (dest2) dest(arg2) else arg(arg2), size2, rTmp2, 2)
+      if (float2) getOperandF(binArg2, size2, rTmp2, 2, "%xmm1")
+      else getOperand(binArg2, size2, rTmp2, 2)
     val (operand1, off1) =
-      if (float1) getOperandF(arg(arg1), size1, rTmp1, off2, "%mm0")
-      else getOperand(arg(arg1), size1, rTmp1, off2)
-    if (!float1 && !float2 && (!arg(arg1).isInstanceOf[Reg]) && (!arg(arg2).isInstanceOf[Reg])) {
-      inst(op("mov", size2), Seq(operand2, rTmp2(size2)))
-      inst(operation, Seq(operand1, rTmp2(size2)))
-      if (pushFlags) inst("pushf", Seq())
-      inst(op("mov", size2), Seq(rTmp2(size2), operand2))
+      if (float1) getOperandF(binArg1, size1, rTmp1, off2, "%xmm0")
+      else getOperand(binArg1, size1, rTmp1, off2)
+    if (!float1 && !float2 && (!binArg1.isInstanceOf[Reg]) && (!binArg2.isInstanceOf[Reg]) && (binArg2 != Nop)) {
+      if (!pushFlags) {
+        def rD(size: Int) = size match {
+          case 0 => "%dl"
+          case 1 => "%dx"
+          case 2 => "%edx"
+          case 3 => "%rdx"
+        }
+
+        inst("pushq", Seq(rOOT))
+        inst(op("mov", size2), Seq(operand2, rD(size2)))
+        inst(operation, Seq(operand1, rD(size2)))
+        inst(op("mov", size2), Seq(rD(size2), operand2))
+        inst("popq", Seq(rOOT))
+      } else {
+        inst(op("mov", size2), Seq(operand2, rTmp2(size2)))
+        inst(operation, Seq(operand1, rTmp2(size2)))
+        inst("pushf", Seq())
+      }
     } else {
       inst(operation, Seq(if (float1) "%xmm0" else operand1, if (float2) "%xmm1" else operand2))
       if (pushFlags) inst("pushf", Seq())
       if (float2) {
         size2 match {
           case 0 =>
-            inst("movq", Seq("%mm1", rTmp2(3)))
+            inst("movq", Seq("%xmm1", rTmp2(3)))
             inst("movl", Seq(rTmp2(2), operand2))
           case 1 =>
-            inst("movq", Seq("%mm1", operand2))
+            inst("movq", Seq("%xmm1", operand2))
         }
       }
     }
@@ -208,7 +232,11 @@ object GenAssembly {
         size match {
           case 0 | 2 =>
             val newOperation = op(operation, size + 1)
-            val (operand, off) = getOperand(arg(p(opc, 3)), size, rTmp1, 2)
+            val binArg = operation match {
+              case "push" => arg(p(opc, 3))
+              case "pop" => dest(p(opc, 3))
+            }
+            val (operand, off) = getOperand(binArg, size, rTmp1, 2)
             operation match {
               case "push" =>
                 inst(size match {
@@ -501,15 +529,25 @@ object GenAssembly {
           case (Reg(_), (SReg | Mem)) => // Can't extend directly into memory
             val (operand2, off2) = getOperand(dest(p(opc, 2)), s2, rTmp2, 2)
             val (operand1, off1) = getOperand(arg(p(opc, 3)), s1, rTmp1, off2)
-            inst(op("mov", s2), Seq(operand2, rTmp2(s2)))
-            inst(operation, Seq(operand1, rTmp2(s2)))
-            inst(op("mov", s2), Seq(rTmp2(s2), operand2))
+
+            def rD(size: Int) = size match {
+              case 0 => "%dl"
+              case 1 => "%dx"
+              case 2 => "%edx"
+              case 3 => "%rdx"
+            }
+            
+            inst("pushq", Seq(rOOT))
+            inst(op("mov", s2), Seq(operand2, rD(s2)))
+            inst(operation, Seq(operand1, rD(s2)))
+            inst(op("mov", s2), Seq(rD(s2), operand2))
+            inst("popq", Seq(rOOT))
             off1
           case _ => customBinary(operation, false, s1, p(opc, 3), false, s2, p(opc, 2), true)
         }
 
       case 0xa => // Floating-point to integer TODO unsigned conversion is tricky
-        val s1 = p(opc, 1) & 0x4
+        val s1 = (p(opc, 1) & 0x4) >> 2
         val s2 = p(opc, 1) & 0x3 match {
           case s if s < 2 => 2
           case s          => s
@@ -532,7 +570,7 @@ object GenAssembly {
         }
 
       case 0xb => // Integer to floating-point
-        val size1 = p(opc, 1) & 0x6
+        val size1 = (p(opc, 1) & 0x6) >> 1
         val size2 = p(opc, 1) & 0x1
         val operation = (size2, p(opc, 1) & 0x8) match {
           case (0x0, 0x0) => op("cvtsi2ss", if (size1 < 2) 2 else size1)
@@ -586,7 +624,7 @@ object GenAssembly {
 
       case 0xd => // Return and Halt
         if (p(opc, 2) != 0 || p(opc, 3) != 0) throw new Exception()
-        p(opc, 1) match {
+        p(opc, 1) & 0xe match {
           case 0x0 =>
             // Transfer execution to caller
             inst("movq", Seq(rL, rPC))
@@ -598,9 +636,12 @@ object GenAssembly {
             }
             // Restore register stack
             inst("movq", Seq(offset(rReg, -16), rReg))
-          case 0xf => inst("ret", Seq()) // Return from tight loop function TODO restore state
+          //case 0xf => inst("ret", Seq()) // Return from tight loop function TODO restore state
         }
-        -1
+        p(opc, 1) match {
+          case 0x0 => -1
+          case 0x1 => -2 // Put return value in register and return to loop
+        }
 
       case 0xe if p(opc, 1) == 0xf => // Conditional ops
         val operation = p(opc, 2) match {
@@ -684,8 +725,19 @@ object GenAssembly {
             inst("popq", Seq(reg._1))
         }
 
+        // Step 3a: Align stack
+        inst("movq", Seq(rSP, rPC)) // Callee-saved register
+        inst("andq", Seq(imm(-16), rSP))
+        inst("pushq", Seq(rPC))
+        inst("pushq", Seq(rPC)) // Twice to maintain 16-byte alignment
+
         // Step 3: Call function
         inst("call", Seq("_" + name))
+
+        // Step 3b: Restore stack
+        inst("popq", Seq(rPC)) // Twice to restore alignment
+        inst("popq", Seq(rPC))
+        inst("movq", Seq(rPC, rSP))
 
         // Step 4: Get return value
         ret match {
@@ -693,7 +745,7 @@ object GenAssembly {
             inst("pushw", Seq("%ax"))
           case 32 | 64 | -1 =>
             inst("pushq", Seq("%rax"))
-          case _ => ()
+          case 0 => ()
         }
 
         // Step 5: Restore state
@@ -707,11 +759,16 @@ object GenAssembly {
         }
         2
     }
-    if (length != -1) {
-      inst("addq", Seq(imm(length), rPC))
+    if (length == -2) { // final return
+      inst("addq", Seq(rCode, rPC))
+      inst("jmpq", Seq("*" + rPC))
+    } else {
+      if (length != -1) {
+        inst("addq", Seq(imm(length), rPC))
+      }
+      inst("movzwq", Seq(dataAt(rPC, 0), rTmp1(3))) // Opcode is in tmp
+      inst("jmp", Seq("*(" + rOOT + "," + rTmp1(3) + ",8)"))
     }
-    inst("movzwq", Seq(dataAt(rPC, 0), rTmp1(3))) // Opcode is in tmp
-    inst("jmp", Seq("*(" + rOOT + "," + rTmp1(3) + ",8)"))
 
     val labelName = "assembly_" + (0 until 4).map(i => Integer.toHexString(p(opc, i))).mkString("")
     ".globl " + labelName + "\n" + labelName + ":\n    " + buffer.mkString(" # " + labelName + "\n    ") + "\n"
@@ -732,7 +789,8 @@ object GenAssembly {
         hbw.write("extern void* assembly_" + String.format("%04x", x: Integer) + " asm(\"assembly_" + String.format("%04x", x: Integer) + "\");\n")
         cbw.write("    &assembly_" + String.format("%04x", x: Integer) + ", \n")
       } catch {
-        case _: Throwable =>
+        case t: Throwable =>
+          if (x == 0x1609) t.printStackTrace
           cbw.write("    NULL, \n")
       }
     }

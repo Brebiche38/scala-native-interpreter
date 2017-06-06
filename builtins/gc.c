@@ -25,7 +25,7 @@ void *end = 0;
 //void scalanative_safepoint_init();
 
 void scalanative_init() {
-    printf("in init\n");
+    //printf("in init\n");
     current = mmap(NULL, CHUNK, DUMMY_GC_PROT, DUMMY_GC_FLAGS, DUMMY_GC_FD,
                    DUMMY_GC_FD_OFFSET);
     end = current + CHUNK;
@@ -33,13 +33,13 @@ void scalanative_init() {
 }
 
 void *scalanative_alloc(uint64_t info, int64_t size) {
-    printf("in alloc\n");
+    //printf("in alloc\n");
     size = (size % 8 == 0) ? size : size + (8 - size % 8);
     if (current + size < end) {
         uint64_t *alloc = current;
         *alloc = info;
         current += size;
-        printf("%lld bytes to %p, rtti %llx\n", size, alloc, info);
+        //printf("%lld bytes to %p, rtti %llx\n", size, alloc, info);
         return alloc;
     } else {
         //printf("Need to allocate more\n");
